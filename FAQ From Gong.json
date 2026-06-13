@@ -1,0 +1,367 @@
+{
+  "name": "FAQ From Gong",
+  "nodes": [
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://us-38776.api.gong.io/v2/calls/extensive",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gongOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filter\": {\n    \"fromDateTime\": \"{{ $json.fromDateTime }}\",\n \n    \"workspaceId\": \"3753824249103117679\"\n  \n  },\n  \"contentSelector\": {\n    \"content\": true,     \n    \"transcript\": true  \n  },\n  \"cursor\": null                  \n} ",
+        "options": {}
+      },
+      "id": "78827cdb-d65d-4a64-aa64-a6b96563d434",
+      "name": "Get Call (Extensive)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        -208
+      ],
+      "credentials": {
+        "gongOAuth2Api": {
+          "id": "oYU0EDp6bU6n5xei",
+          "name": "Gong get transcripts"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Map Extensive → one item per call with top-level callId\nconst out = [];\nconst calls = (items[0] && items[0].json && items[0].json.calls) || [];\nfor (const c of calls) {\n  const md = c.metaData || {};\n  out.push({\n    json: {\n      callId: md.id,\n      callUrl: md.url,\n      title: md.title,\n      scheduled: md.scheduled,\n      started: md.started,\n      durationSec: md.duration,\n      language: md.language,\n      meetingUrl: md.meetingUrl\n    }\n  });\n}\nreturn out;"
+      },
+      "id": "c2078a03-c511-4f4a-a36e-8d4633c13421",
+      "name": "Map Extensive → keyed",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        -208
+      ]
+    },
+    {
+      "parameters": {
+        "functionCode": "// Map Transcript → one item per call with top-level callId\n// Prefer callTranscripts[], but fall back to transcripts/transcript/calls/results\nconst out = [];\nconst root = (items[0] && items[0].json) || {};\n\nconst list = root.callTranscripts\n  || root.transcripts\n  || root.transcript\n  || root.calls\n  || root.results\n  || [];\n\nfor (const entry of list) {\n  const callId = entry.callId\n    || entry.id\n    || (entry.call && entry.call.id)\n    || (entry.metaData && entry.metaData.id);\n\n  // Try common transcript segment containers\n  const segs = entry.transcript\n    || entry.segments\n    || entry.sentences\n    || entry.utterances\n    || entry.items\n    || [];\n\n  if (callId) {\n    out.push({ json: { callId, transcriptSegments: segs } });\n  }\n}\n\nreturn out;"
+      },
+      "id": "6c722c71-34d9-45ee-938f-6047e993ab66",
+      "name": "Map Transcript → keyed",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        -144,
+        32
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://us-38776.api.gong.io/v2/calls/transcript",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "gongOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filter\": {\n    \"fromDateTime\":\"{{ $json.fromDateTime }}\"  },\n  \"returnSimplifiedTranscript\": false,   \n  \"cursor\": null\n} ",
+        "options": {}
+      },
+      "id": "f79c91bd-88d1-479e-adc3-3b1b7cb19597",
+      "name": "Get Transcript1",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        32
+      ],
+      "credentials": {
+        "gongOAuth2Api": {
+          "id": "oYU0EDp6bU6n5xei",
+          "name": "Gong get transcripts"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "mergeByKey",
+        "propertyName1": "=callId",
+        "propertyName2": "=callId"
+      },
+      "id": "e3dc9aa2-07a0-433c-a89c-ad32749d7bb6",
+      "name": "Merge by Key (callId)1",
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 1,
+      "position": [
+        112,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a helpful assistant for analyzing call transcripts.\n\nTask:\nAnalyze the provided call {{ $json.quoteable }} and extract key insights.\n\nInstructions:\n1.  Identify and summarize in one sentence positive sentiment\n2.  Identify and summarize in one sentence negative sentiment\n3.  Extract and list all **actionable ideas** or next steps discussed.\n\nOutput Format:\nYour response must be a simple text ready for a slack massage\nCallid {{ $json.callId }}\nCall title {{ $json.title }}  {{ $json.callUrl }}\npositive sentiment in a list\nnegative sentiment in a list\nactionable ideas in a list\n\n\n",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [
+        448,
+        -80
+      ],
+      "id": "3478e3d5-5abb-4400-bf40-4d82683c4838",
+      "name": "AI Agent2"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        448,
+        80
+      ],
+      "id": "1856cd43-35c9-4575-b19f-243ebf306ed8",
+      "name": "Google Gemini Chat Model2",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "udWhbjjbFM7QYnX9",
+          "name": "Google Gemini(PaLM) Api account 2"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "subtractFromDate",
+        "magnitude": "={{ $now }}",
+        "duration": 1,
+        "options": {
+          "includeInputFields": "={{$moment($json.newDate).utc().startOf('day').format('YYYY-MM-DD[T]HH:mm:ss[Z]')}}"
+        }
+      },
+      "type": "n8n-nodes-base.dateTime",
+      "typeVersion": 2,
+      "position": [
+        -656,
+        -80
+      ],
+      "id": "b3b78cf1-4a49-4433-b0ff-6fb5674bdf3f",
+      "name": "Date & Time2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "a85a70cb-e6e1-4af9-b849-a60411f2bd05",
+              "name": "fromDateTime",
+              "value": "={{ new Date(\n       Date.UTC(\n         new Date($json.newDate).getUTCFullYear(),\n         new Date($json.newDate).getUTCMonth(),\n         new Date($json.newDate).getUTCDate(),\n         0, 0, 0\n       )\n     ).toISOString().replace('.000','').trim() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -496,
+        -80
+      ],
+      "id": "6e41689d-9028-41f5-965b-76ab1c09282c",
+      "name": "Edit Fields2"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "C098PEVAS4T",
+          "mode": "list",
+          "cachedResultName": "incredibuild-gong-insights"
+        },
+        "text": "={{ $json.text }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [
+        912,
+        -80
+      ],
+      "id": "aae445ba-a48a-42ef-be17-f41701dd2162",
+      "name": "Send a message2",
+      "webhookId": "752325b2-c798-4aef-8131-51271df69dcf",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "UGdBfnrnaQs3GFgp",
+          "name": "Slack account 8"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "functionCode": "// Prepare Calls for Agent (one item per call; no {calls:[...]} wrapper)\nconst MAX_CHARS_PER_CALL = 12000;\n\nfunction segToText(seg) {\n  if (!seg) return '';\n  if (typeof seg === 'string') return seg;\n  const parts = [];\n  if (Array.isArray(seg.sentences)) parts.push(seg.sentences.map(s => (s && s.text) ? String(s.text) : '').join(' '));\n  if (seg.text) parts.push(String(seg.text));\n  if (seg.utterance) parts.push(String(seg.utterance));\n  if (!parts.length) {\n    try { parts.push(JSON.stringify(seg)); } catch {}\n  }\n  return parts.join(' ').trim();\n}\n\n// If nothing came in, return [] (downstream nodes won't receive 0 items otherwise)\nif (!items || items.length === 0) {\n  return [];\n}\n\nconst calls = items.map(i => {\n  const j = i.json || {};\n  const segs = Array.isArray(j.transcriptSegments) ? j.transcriptSegments : [];\n  const flatText = segs.map(segToText).filter(Boolean).join(' ');\n  const trimmed = flatText.slice(0, MAX_CHARS_PER_CALL);\n  return {\n    callId: String(j.callId ?? ''),\n    title: j.title || '',\n    callUrl: j.callUrl || '',\n    language: j.language || '',\n    started: j.started || '',\n    durationSec: j.durationSec ?? null,\n    quoteable: trimmed,\n  };\n}).filter(c => c.callId);\n\n// 🔑 Return one item per call (AI Agent will receive all objects)\nreturn calls.map(c => ({ json: c }));\n"
+      },
+      "id": "fb2aee12-ea5f-4f3d-86b8-d1fcc6a8c942",
+      "name": "Prepare Calls for Agent (guarded)",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [
+        288,
+        -80
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "//--------------------------------------------------------------------\n// Input : items = [ { json: { output: \"Callid …\\nCall title … https://…\\n\\n…\" } }, … ]\n// Output: multiple items [{ json: { text } }, …] (plain Slack mrkdwn, no blocks)\n//--------------------------------------------------------------------\n\nconst MAX_MSG = 39000;      // keep a safety margin under Slack's ~40k char limit\nconst PER_CALL_LIMIT = 3500; // optional soft cap per call section\n\nfunction esc(s = '') {\n  return String(s).replace(/[&<>]/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));\n}\nfunction chop(s = '', n = 3500) {\n  return s.length > n ? s.slice(0, n - 1) + '…' : s;\n}\n\n// Parse one AI Agent \"output\" blob to a simple text section\nfunction renderCallSection(rawOutput) {\n  const raw = String(rawOutput || '').trim();\n  if (!raw) return '';\n\n  const lines = raw.split('\\n');\n\n  // CallID\n  const idLine = lines.find(l => /^Callid\\s+/i.test(l));\n  const callId = idLine ? idLine.replace(/^Callid\\s+/i, '').trim() : '';\n\n  // \"Call title <title> <url>\"\n  const titleLine = lines.find(l => /^Call title\\s+/i.test(l));\n  let title = '';\n  let url = '';\n  if (titleLine) {\n    const m = titleLine.match(/^Call title\\s+(.+?)\\s+(https?:\\/\\/\\S+)/i);\n    if (m) {\n      title = m[1].trim();\n      url = m[2].trim();\n    } else {\n      title = titleLine.replace(/^Call title\\s+/i, '').trim();\n    }\n  }\n\n  const startIdx = titleLine ? lines.indexOf(titleLine) + 1 : 0;\n  const body = lines.slice(startIdx).join('\\n').trim();\n\n  const titlePart = url\n    ? `*<${url}|${esc(title || 'Untitled')}>*`\n    : `*${esc(title || 'Untitled')}*`;\n\n  const idPart = callId ? `CallID: \\`${esc(callId)}\\`` : '';\n  const bodyPart = body ? chop(esc(body), PER_CALL_LIMIT) : '';\n\n  // Simple, readable section with a divider line\n  const section = [\n    titlePart,\n    idPart && bodyPart ? `${idPart}\\n${bodyPart}` : (idPart || bodyPart),\n  ].filter(Boolean).join('\\n') + '\\n──────────\\n';\n\n  return section;\n}\n\n// Build all sections\nconst sections = [];\nfor (const it of items) {\n  const out = it.json?.output ?? '';\n  const sec = renderCallSection(out);\n  if (sec) sections.push(sec);\n}\n\n// Pack into multiple messages under MAX_MSG\nconst results = [];\nlet buf = '';\n\nfor (const sec of sections) {\n  if ((buf + sec).length > MAX_MSG) {\n    // flush current message\n    if (buf.trim()) results.push({ json: { text: buf.trim() } });\n    buf = sec; // start new message\n  } else {\n    buf += sec;\n  }\n}\n// flush remainder\nif (buf.trim()) results.push({ json: { text: buf.trim() } });\n\n// Fallback if nothing parsed\nif (!results.length) {\n  results.push({ json: { text: 'No content to send.' } });\n}\n\nreturn results;\n"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        752,
+        -80
+      ],
+      "id": "5ad17e68-abde-4402-a201-dea9619ffb4d",
+      "name": "Code"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Get Call (Extensive)": {
+      "main": [
+        [
+          {
+            "node": "Map Extensive → keyed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Extensive → keyed": {
+      "main": [
+        [
+          {
+            "node": "Merge by Key (callId)1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Map Transcript → keyed": {
+      "main": [
+        [
+          {
+            "node": "Merge by Key (callId)1",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Get Transcript1": {
+      "main": [
+        [
+          {
+            "node": "Map Transcript → keyed",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge by Key (callId)1": {
+      "main": [
+        [
+          {
+            "node": "Prepare Calls for Agent (guarded)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent2": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model2": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Date & Time2": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields2": {
+      "main": [
+        [
+          {
+            "node": "Get Call (Extensive)",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Get Transcript1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Calls for Agent (guarded)": {
+      "main": [
+        [
+          {
+            "node": "AI Agent2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Code": {
+      "main": [
+        [
+          {
+            "node": "Send a message2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": false,
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "versionId": "83c4792b-1224-47bd-bbb2-aa9df0f4dc24",
+  "meta": {
+    "instanceId": "1b2b16eea9913243065c10eb2962b896b904c3c50697efa03010fc59b8b34428"
+  },
+  "id": "lRCT766s5SCfu74T",
+  "tags": []
+}
