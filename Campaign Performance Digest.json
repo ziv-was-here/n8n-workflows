@@ -1,0 +1,181 @@
+{
+  "name": "Campaign Performance Digest",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📊 Campaign Performance Digest\n\n**What this does:**\nEvery Monday at 9am, pulls last week's HubSpot email campaign stats (sends, opens, clicks, unsubscribes), uses Gemini AI to write a plain-English digest with highlights and recommendations, posts it to Slack, and logs the raw metrics to Google Sheets.\n\n---\n\n### ✅ Credentials to configure\n1. **HubSpot OAuth2** (`hubspotOAuth2Api`) — node: *Get Email Campaigns*\n2. **Google Gemini API** (`googlePalmApi`) — node: *Google Gemini*\n3. **Slack OAuth2** (`slackOAuth2Api`) — node: *Post Digest to Slack*\n4. **Google Sheets OAuth2** (`googleSheetsOAuth2Api`) — node: *Log Metrics*\n\n### ⚙️ Customize\n- The HubSpot Marketing Email API requires a **Marketing Hub** subscription\n- Set your Google Sheet ID and tab name in *Log Metrics*\n- Set your Slack channel in *Post Digest to Slack*\n- Adjust the date window in *Get Email Campaigns* (default: last 7 days)",
+        "height": 480,
+        "width": 580,
+        "color": 7
+      },
+      "id": "cpd-note-001",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-380, -340]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 9 }]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "cpd-sched-001",
+      "name": "Every Monday 9am"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Calculate last week's date range (Mon–Sun)\nconst now = new Date();\nconst dayOfWeek = now.getDay() || 7;\nconst lastMonday = new Date(now);\nlastMonday.setDate(now.getDate() - dayOfWeek - 6);\nlastMonday.setHours(0, 0, 0, 0);\nconst lastSunday = new Date(lastMonday);\nlastSunday.setDate(lastMonday.getDate() + 6);\nlastSunday.setHours(23, 59, 59, 999);\n\nreturn [{\n  json: {\n    startMs: lastMonday.getTime(),\n    endMs: lastSunday.getTime(),\n    startDate: lastMonday.toISOString().split('T')[0],\n    endDate: lastSunday.toISOString().split('T')[0]\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "id": "cpd-code-dates-001",
+      "name": "Calculate Date Range"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "=https://api.hubapi.com/marketing/v3/emails?updatedAfter={{ $json.startMs }}&limit=50&sort=-stats.sent",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotOAuth2Api",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 0],
+      "id": "cpd-hs-emails-001",
+      "name": "Get Email Campaigns",
+      "credentials": {
+        "hubspotOAuth2Api": {
+          "id": "REPLACE_WITH_HUBSPOT_CREDENTIAL_ID",
+          "name": "HubSpot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate campaign metrics\nconst emails = $input.first().json.results || [];\nif (emails.length === 0) {\n  return [{ json: { hasData: false, summary: 'No campaigns found for this period.', campaigns: [] } }];\n}\n\nconst campaigns = emails.map(e => {\n  const stats = e.stats || e.counters || {};\n  const sent = stats.sent || stats.delivered || 0;\n  const opens = stats.open || stats.opens || 0;\n  const clicks = stats.click || stats.clicks || 0;\n  const unsubs = stats.unsubscribed || stats.unsubscribes || 0;\n  const openRate = sent > 0 ? ((opens / sent) * 100).toFixed(1) : '0';\n  const clickRate = sent > 0 ? ((clicks / sent) * 100).toFixed(1) : '0';\n  return {\n    name: e.name || e.subject || 'Untitled',\n    subject: e.subject || '',\n    sent,\n    opens,\n    clicks,\n    unsubs,\n    openRate: parseFloat(openRate),\n    clickRate: parseFloat(clickRate)\n  };\n});\n\nconst totals = {\n  totalCampaigns: campaigns.length,\n  totalSent: campaigns.reduce((s, c) => s + c.sent, 0),\n  totalOpens: campaigns.reduce((s, c) => s + c.opens, 0),\n  totalClicks: campaigns.reduce((s, c) => s + c.clicks, 0),\n  totalUnsubs: campaigns.reduce((s, c) => s + c.unsubs, 0)\n};\ntotals.avgOpenRate = totals.totalSent > 0\n  ? ((totals.totalOpens / totals.totalSent) * 100).toFixed(1)\n  : '0';\ntotals.avgClickRate = totals.totalSent > 0\n  ? ((totals.totalClicks / totals.totalSent) * 100).toFixed(1)\n  : '0';\n\nconst bestByOpen = [...campaigns].sort((a, b) => b.openRate - a.openRate)[0];\nconst bestByClick = [...campaigns].sort((a, b) => b.clickRate - a.clickRate)[0];\n\nconst campaignLines = campaigns\n  .map(c => `- ${c.name}: ${c.sent} sent | ${c.openRate}% open | ${c.clickRate}% click | ${c.unsubs} unsubs`)\n  .join('\\n');\n\nreturn [{\n  json: {\n    hasData: true,\n    ...totals,\n    bestOpenCampaign: bestByOpen ? `${bestByOpen.name} (${bestByOpen.openRate}% open rate)` : 'N/A',\n    bestClickCampaign: bestByClick ? `${bestByClick.name} (${bestByClick.clickRate}% CTR)` : 'N/A',\n    campaignLines,\n    campaigns,\n    startDate: $('Calculate Date Range').item.json.startDate,\n    endDate: $('Calculate Date Range').item.json.endDate\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [720, 0],
+      "id": "cpd-code-agg-001",
+      "name": "Aggregate Metrics"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a growth marketing analyst writing a weekly email performance digest.\n\nWeek: {{ $json.startDate }} to {{ $json.endDate }}\n\nMetrics:\n- Campaigns sent: {{ $json.totalCampaigns }}\n- Total emails sent: {{ $json.totalSent }}\n- Total opens: {{ $json.totalOpens }} (avg {{ $json.avgOpenRate }}% open rate)\n- Total clicks: {{ $json.totalClicks }} (avg {{ $json.avgClickRate }}% CTR)\n- Total unsubscribes: {{ $json.totalUnsubs }}\n- Best open rate: {{ $json.bestOpenCampaign }}\n- Best click rate: {{ $json.bestClickCampaign }}\n\nBreakdown:\n{{ $json.campaignLines }}\n\nWrite a concise 3-paragraph digest:\n1. Overall performance summary (2–3 sentences, highlight what's good or bad vs. industry benchmarks: 20-25% open rate, 2-3% CTR)\n2. Top wins or standout campaigns this week\n3. One or two actionable recommendations for next week\n\nKeep it plain text, no markdown headers. Tone: professional but friendly.",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [960, 0],
+      "id": "cpd-ai-001",
+      "name": "AI Digest Writer"
+    },
+    {
+      "parameters": { "options": {} },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [960, 180],
+      "id": "cpd-gemini-001",
+      "name": "Google Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=📊 *Weekly Campaign Digest — {{ $('Aggregate Metrics').item.json.startDate }} to {{ $('Aggregate Metrics').item.json.endDate }}*\n\n*Quick Stats:*\n• {{ $('Aggregate Metrics').item.json.totalCampaigns }} campaigns | {{ $('Aggregate Metrics').item.json.totalSent }} sent | {{ $('Aggregate Metrics').item.json.avgOpenRate }}% open rate | {{ $('Aggregate Metrics').item.json.avgClickRate }}% CTR | {{ $('Aggregate Metrics').item.json.totalUnsubs }} unsubs\n\n{{ $json.output }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1200, 0],
+      "id": "cpd-slack-001",
+      "name": "Post Digest to Slack",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Campaign Metrics",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Week Start": "={{ $('Aggregate Metrics').item.json.startDate }}",
+            "Week End": "={{ $('Aggregate Metrics').item.json.endDate }}",
+            "Campaigns": "={{ $('Aggregate Metrics').item.json.totalCampaigns }}",
+            "Total Sent": "={{ $('Aggregate Metrics').item.json.totalSent }}",
+            "Total Opens": "={{ $('Aggregate Metrics').item.json.totalOpens }}",
+            "Avg Open Rate %": "={{ $('Aggregate Metrics').item.json.avgOpenRate }}",
+            "Total Clicks": "={{ $('Aggregate Metrics').item.json.totalClicks }}",
+            "Avg CTR %": "={{ $('Aggregate Metrics').item.json.avgClickRate }}",
+            "Total Unsubs": "={{ $('Aggregate Metrics').item.json.totalUnsubs }}",
+            "Best Open Campaign": "={{ $('Aggregate Metrics').item.json.bestOpenCampaign }}",
+            "Best Click Campaign": "={{ $('Aggregate Metrics').item.json.bestClickCampaign }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1440, 0],
+      "id": "cpd-sheets-001",
+      "name": "Log Metrics",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every Monday 9am": { "main": [[{ "node": "Calculate Date Range", "type": "main", "index": 0 }]] },
+    "Calculate Date Range": { "main": [[{ "node": "Get Email Campaigns", "type": "main", "index": 0 }]] },
+    "Get Email Campaigns": { "main": [[{ "node": "Aggregate Metrics", "type": "main", "index": 0 }]] },
+    "Aggregate Metrics": { "main": [[{ "node": "AI Digest Writer", "type": "main", "index": 0 }]] },
+    "Google Gemini": { "ai_languageModel": [[{ "node": "AI Digest Writer", "type": "ai_languageModel", "index": 0 }]] },
+    "AI Digest Writer": { "main": [[{ "node": "Post Digest to Slack", "type": "main", "index": 0 }]] },
+    "Post Digest to Slack": { "main": [[{ "node": "Log Metrics", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "campaign-digest-v1",
+  "meta": { "instanceId": "growth-marketing-examples" },
+  "id": "GrowthWF004",
+  "tags": []
+}
