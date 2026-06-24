@@ -1,20 +1,20 @@
 {
-  "name": "FAQ From Gong",
+  "name": "Get feedback",
   "nodes": [
     {
       "parameters": {
-        "content": "## 📋 FAQ From Gong — Setup Instructions\n\n**What this workflow does:**\nFetches yesterday's Gong calls, extracts transcripts, runs Google Gemini AI analysis (positive/negative sentiment + action items), and posts a formatted summary to Slack.\n\n**Trigger:** No trigger — run manually or add a Schedule Trigger node.\n\n---\n\n### ✅ Credentials to configure\n1. **Gong OAuth2** (`gongOAuth2Api`) — nodes: *Get Call (Extensive)*, *Get Transcript1*\n2. **Google Gemini API** (`googlePalmApi`) — node: *Google Gemini Chat Model2*\n3. **Slack OAuth2** (`slackOAuth2Api`) — node: *Send a message2*\n\n---\n\n### ⚙️ Things to customize\n- `workspaceId` in *Get Call (Extensive)*: Update to your Gong workspace ID\n- Slack channel in *Send a message2*: Change to your target channel",
-        "height": 420,
+        "content": "## 📋 Get Feedback — Setup Instructions\n\n**What this workflow does:**\nEvery 4 days, fetches Gong calls, extracts transcripts, runs Google Gemini AI analysis (positive/negative sentiment + action items), and posts a formatted summary to Slack.\n\n**Trigger:** Schedule Trigger — runs automatically every 4 days.\n\n---\n\n### ✅ Credentials to configure\n1. **Gong OAuth2** (`gongOAuth2Api`) — nodes: *Get Call (Extensive)*, *Get Transcript1*\n2. **Google Gemini API** (`googlePalmApi`) — node: *Google Gemini Chat Model2*\n3. **Slack OAuth2** (`slackOAuth2Api`) — node: *Send a message2*\n\n---\n\n### ⚙️ Things to customize\n- `workspaceId` in *Get Call (Extensive)*: Update to your Gong workspace ID\n- Slack channel in *Send a message2*: Change to your target channel\n- Schedule interval in *Schedule Trigger*: Currently set to every 4 days",
+        "height": 440,
         "width": 520,
         "color": 5
       },
-      "id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+      "id": "b2c3d4e5-f6a7-8901-bcde-f12345678901",
       "name": "Setup Instructions",
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        -1060,
-        -300
+        -6020,
+        -1560
       ]
     },
     {
@@ -28,13 +28,13 @@
         "jsonBody": "={\n  \"filter\": {\n    \"fromDateTime\": \"{{ $json.fromDateTime }}\",\n \n    \"workspaceId\": \"3753824249103117679\"\n  \n  },\n  \"contentSelector\": {\n    \"content\": true,     \n    \"transcript\": true  \n  },\n  \"cursor\": null                  \n} ",
         "options": {}
       },
-      "id": "78827cdb-d65d-4a64-aa64-a6b96563d434",
+      "id": "d2d118b8-1f24-42fc-ad74-d3602b3838e1",
       "name": "Get Call (Extensive)",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -320,
-        -208
+        -5168,
+        -1424
       ],
       "credentials": {
         "gongOAuth2Api": {
@@ -47,26 +47,26 @@
       "parameters": {
         "functionCode": "// Map Extensive → one item per call with top-level callId\nconst out = [];\nconst calls = (items[0] && items[0].json && items[0].json.calls) || [];\nfor (const c of calls) {\n  const md = c.metaData || {};\n  out.push({\n    json: {\n      callId: md.id,\n      callUrl: md.url,\n      title: md.title,\n      scheduled: md.scheduled,\n      started: md.started,\n      durationSec: md.duration,\n      language: md.language,\n      meetingUrl: md.meetingUrl\n    }\n  });\n}\nreturn out;"
       },
-      "id": "c2078a03-c511-4f4a-a36e-8d4633c13421",
+      "id": "f82c4b4c-4097-4677-a4de-5b559b2978cc",
       "name": "Map Extensive → keyed",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
       "position": [
-        -144,
-        -208
+        -4976,
+        -1424
       ]
     },
     {
       "parameters": {
         "functionCode": "// Map Transcript → one item per call with top-level callId\n// Prefer callTranscripts[], but fall back to transcripts/transcript/calls/results\nconst out = [];\nconst root = (items[0] && items[0].json) || {};\n\nconst list = root.callTranscripts\n  || root.transcripts\n  || root.transcript\n  || root.calls\n  || root.results\n  || [];\n\nfor (const entry of list) {\n  const callId = entry.callId\n    || entry.id\n    || (entry.call && entry.call.id)\n    || (entry.metaData && entry.metaData.id);\n\n  // Try common transcript segment containers\n  const segs = entry.transcript\n    || entry.segments\n    || entry.sentences\n    || entry.utterances\n    || entry.items\n    || [];\n\n  if (callId) {\n    out.push({ json: { callId, transcriptSegments: segs } });\n  }\n}\n\nreturn out;"
       },
-      "id": "6c722c71-34d9-45ee-938f-6047e993ab66",
+      "id": "f78c955d-851e-46fc-a244-9fc3215ef250",
       "name": "Map Transcript → keyed",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
       "position": [
-        -144,
-        32
+        -4976,
+        -1200
       ]
     },
     {
@@ -80,13 +80,13 @@
         "jsonBody": "={\n  \"filter\": {\n    \"fromDateTime\":\"{{ $json.fromDateTime }}\"  },\n  \"returnSimplifiedTranscript\": false,   \n  \"cursor\": null\n} ",
         "options": {}
       },
-      "id": "f79c91bd-88d1-479e-adc3-3b1b7cb19597",
+      "id": "f8ebad90-89c5-41d3-a5b4-041145b151b0",
       "name": "Get Transcript1",
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.2,
       "position": [
-        -320,
-        32
+        -5168,
+        -1200
       ],
       "credentials": {
         "gongOAuth2Api": {
@@ -101,13 +101,13 @@
         "propertyName1": "=callId",
         "propertyName2": "=callId"
       },
-      "id": "e3dc9aa2-07a0-433c-a89c-ad32749d7bb6",
+      "id": "c815a28f-ec92-4660-a37e-3b1d524c1bae",
       "name": "Merge by Key (callId)1",
       "type": "n8n-nodes-base.merge",
       "typeVersion": 1,
       "position": [
-        112,
-        -80
+        -4736,
+        -1296
       ]
     },
     {
@@ -119,10 +119,10 @@
       "type": "@n8n/n8n-nodes-langchain.agent",
       "typeVersion": 2,
       "position": [
-        448,
-        -80
+        -4400,
+        -1296
       ],
-      "id": "3478e3d5-5abb-4400-bf40-4d82683c4838",
+      "id": "e8e06c4e-f159-4ddf-b435-c98823f7f9b0",
       "name": "AI Agent2"
     },
     {
@@ -132,10 +132,10 @@
       "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
       "typeVersion": 1,
       "position": [
-        448,
-        80
+        -4400,
+        -1136
       ],
-      "id": "1856cd43-35c9-4575-b19f-243ebf306ed8",
+      "id": "b61eefc3-6af6-4323-a95b-90601687735f",
       "name": "Google Gemini Chat Model2",
       "credentials": {
         "googlePalmApi": {
@@ -156,10 +156,10 @@
       "type": "n8n-nodes-base.dateTime",
       "typeVersion": 2,
       "position": [
-        -656,
-        -80
+        -5504,
+        -1296
       ],
-      "id": "b3b78cf1-4a49-4433-b0ff-6fb5674bdf3f",
+      "id": "70d8b4a7-9eaa-40b9-9cc5-3fb0fd3616b5",
       "name": "Date & Time2"
     },
     {
@@ -179,10 +179,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        -496,
-        -80
+        -5344,
+        -1296
       ],
-      "id": "6e41689d-9028-41f5-965b-76ab1c09282c",
+      "id": "e97d9547-005c-4883-8eb6-14ba773aff55",
       "name": "Edit Fields2"
     },
     {
@@ -201,10 +201,10 @@
       "type": "n8n-nodes-base.slack",
       "typeVersion": 2.3,
       "position": [
-        912,
-        -80
+        -3936,
+        -1296
       ],
-      "id": "aae445ba-a48a-42ef-be17-f41701dd2162",
+      "id": "59a398d8-5146-41c2-ae84-9a67d6952909",
       "name": "Send a message2",
       "webhookId": "752325b2-c798-4aef-8131-51271df69dcf",
       "credentials": {
@@ -218,13 +218,13 @@
       "parameters": {
         "functionCode": "// Prepare Calls for Agent (one item per call; no {calls:[...]} wrapper)\nconst MAX_CHARS_PER_CALL = 12000;\n\nfunction segToText(seg) {\n  if (!seg) return '';\n  if (typeof seg === 'string') return seg;\n  const parts = [];\n  if (Array.isArray(seg.sentences)) parts.push(seg.sentences.map(s => (s && s.text) ? String(s.text) : '').join(' '));\n  if (seg.text) parts.push(String(seg.text));\n  if (seg.utterance) parts.push(String(seg.utterance));\n  if (!parts.length) {\n    try { parts.push(JSON.stringify(seg)); } catch {}\n  }\n  return parts.join(' ').trim();\n}\n\n// If nothing came in, return [] (downstream nodes won't receive 0 items otherwise)\nif (!items || items.length === 0) {\n  return [];\n}\n\nconst calls = items.map(i => {\n  const j = i.json || {};\n  const segs = Array.isArray(j.transcriptSegments) ? j.transcriptSegments : [];\n  const flatText = segs.map(segToText).filter(Boolean).join(' ');\n  const trimmed = flatText.slice(0, MAX_CHARS_PER_CALL);\n  return {\n    callId: String(j.callId ?? ''),\n    title: j.title || '',\n    callUrl: j.callUrl || '',\n    language: j.language || '',\n    started: j.started || '',\n    durationSec: j.durationSec ?? null,\n    quoteable: trimmed,\n  };\n}).filter(c => c.callId);\n\n// 🔑 Return one item per call (AI Agent will receive all objects)\nreturn calls.map(c => ({ json: c }));\n"
       },
-      "id": "fb2aee12-ea5f-4f3d-86b8-d1fcc6a8c942",
+      "id": "d519eb6f-afe9-404d-b318-0235b0e1c9d8",
       "name": "Prepare Calls for Agent (guarded)",
       "type": "n8n-nodes-base.function",
       "typeVersion": 1,
       "position": [
-        288,
-        -80
+        -4560,
+        -1296
       ]
     },
     {
@@ -234,11 +234,30 @@
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        752,
-        -80
+        -4096,
+        -1296
       ],
-      "id": "5ad17e68-abde-4402-a201-dea9619ffb4d",
+      "id": "4281a113-b171-421d-a973-089926a0f0d7",
       "name": "Code"
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "daysInterval": 4
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -5664,
+        -1296
+      ],
+      "id": "918a8f2f-70f5-44db-857c-b9a8d87735de",
+      "name": "Schedule Trigger"
     }
   ],
   "pinData": {},
@@ -298,17 +317,6 @@
         ]
       ]
     },
-    "AI Agent2": {
-      "main": [
-        [
-          {
-            "node": "Code",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Google Gemini Chat Model2": {
       "ai_languageModel": [
         [
@@ -347,6 +355,17 @@
         ]
       ]
     },
+    "AI Agent2": {
+      "main": [
+        [
+          {
+            "node": "Code",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
     "Prepare Calls for Agent (guarded)": {
       "main": [
         [
@@ -368,16 +387,28 @@
           }
         ]
       ]
+    },
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Date & Time2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
     }
   },
   "active": false,
   "settings": {
     "executionOrder": "v1"
   },
-  "versionId": "83c4792b-1224-47bd-bbb2-aa9df0f4dc24",
+  "versionId": "7525ba11-0d15-4335-a0ae-e511dc8958cd",
   "meta": {
+    "templateCredsSetupCompleted": true,
     "instanceId": "1b2b16eea9913243065c10eb2962b896b904c3c50697efa03010fc59b8b34428"
   },
-  "id": "lRCT766s5SCfu74T",
+  "id": "X8mos23u1y8uY1Y7",
   "tags": []
 }
