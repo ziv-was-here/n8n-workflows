@@ -1,0 +1,159 @@
+{
+  "name": "New Lead to CRM + Slack",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 📥 New Lead → CRM + Slack\n\n**What this does:**\nReceives new leads via webhook (from any form, ad platform, or Zapier), creates or updates the contact in HubSpot, logs the lead to a Google Sheet, and sends an instant Slack notification to the sales team.\n\n---\n\n### ✅ Credentials to configure\n1. **HubSpot OAuth2** (`hubspotOAuth2Api`) — node: *Upsert HubSpot Contact*\n2. **Google Sheets OAuth2** (`googleSheetsOAuth2Api`) — node: *Log to Google Sheet*\n3. **Slack OAuth2** (`slackOAuth2Api`) — node: *Notify Sales Team*\n\n### ⚙️ Customize\n- Copy the webhook URL from the *Webhook* node and paste it into your form/ad platform\n- Set your Google Sheet ID and sheet name in *Log to Google Sheet*\n- Set your Slack channel in *Notify Sales Team*\n- Adjust the field mappings in *Normalize Lead Data* to match your form fields",
+        "height": 480,
+        "width": 560,
+        "color": 3
+      },
+      "id": "nl-note-001",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-360, -320]
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "new-lead",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [0, 0],
+      "id": "nl-webhook-001",
+      "name": "Webhook",
+      "webhookId": "new-lead-webhook"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Normalize incoming lead data — adapt field names to match your form\nconst body = $input.first().json.body || $input.first().json;\n\nconst lead = {\n  firstName: body.firstName || body.first_name || body.fname || '',\n  lastName: body.lastName || body.last_name || body.lname || '',\n  email: body.email || body.email_address || '',\n  phone: body.phone || body.phone_number || '',\n  company: body.company || body.company_name || body.organization || '',\n  jobTitle: body.jobTitle || body.job_title || body.title || '',\n  source: body.source || body.utm_source || body.lead_source || 'Webhook',\n  message: body.message || body.notes || ''\n};\n\nif (!lead.email) {\n  throw new Error('Email is required but was not found in the payload');\n}\n\nreturn [{ json: lead }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [240, 0],
+      "id": "nl-code-norm-001",
+      "name": "Normalize Lead Data"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/batch/upsert",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"inputs\": [\n    {\n      \"idProperty\": \"email\",\n      \"id\": \"{{ $json.email }}\",\n      \"properties\": {\n        \"firstname\": \"{{ $json.firstName }}\",\n        \"lastname\": \"{{ $json.lastName }}\",\n        \"email\": \"{{ $json.email }}\",\n        \"phone\": \"{{ $json.phone }}\",\n        \"company\": \"{{ $json.company }}\",\n        \"jobtitle\": \"{{ $json.jobTitle }}\",\n        \"hs_lead_status\": \"NEW\",\n        \"lead_source\": \"{{ $json.source }}\"\n      }\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [480, 0],
+      "id": "nl-hs-upsert-001",
+      "name": "Upsert HubSpot Contact",
+      "credentials": {
+        "hubspotOAuth2Api": {
+          "id": "REPLACE_WITH_HUBSPOT_CREDENTIAL_ID",
+          "name": "HubSpot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Leads",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Timestamp": "={{ $now.toISO() }}",
+            "First Name": "={{ $('Normalize Lead Data').item.json.firstName }}",
+            "Last Name": "={{ $('Normalize Lead Data').item.json.lastName }}",
+            "Email": "={{ $('Normalize Lead Data').item.json.email }}",
+            "Phone": "={{ $('Normalize Lead Data').item.json.phone }}",
+            "Company": "={{ $('Normalize Lead Data').item.json.company }}",
+            "Job Title": "={{ $('Normalize Lead Data').item.json.jobTitle }}",
+            "Source": "={{ $('Normalize Lead Data').item.json.source }}",
+            "Message": "={{ $('Normalize Lead Data').item.json.message }}",
+            "HubSpot ID": "={{ $json.results && $json.results[0] ? $json.results[0].id : '' }}"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [720, 0],
+      "id": "nl-sheets-001",
+      "name": "Log to Google Sheet",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=📥 *New Lead* from {{ $('Normalize Lead Data').item.json.source }}\n\n*{{ $('Normalize Lead Data').item.json.firstName }} {{ $('Normalize Lead Data').item.json.lastName }}*\n📧 {{ $('Normalize Lead Data').item.json.email }}\n📞 {{ $('Normalize Lead Data').item.json.phone }}\n💼 {{ $('Normalize Lead Data').item.json.jobTitle }} @ {{ $('Normalize Lead Data').item.json.company }}\n\n{{ $('Normalize Lead Data').item.json.message ? '💬 ' + $('Normalize Lead Data').item.json.message : '' }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [960, 0],
+      "id": "nl-slack-001",
+      "name": "Notify Sales Team",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={ \"status\": \"ok\", \"message\": \"Lead received\" }",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [1200, 0],
+      "id": "nl-respond-001",
+      "name": "Return 200 OK"
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Webhook": { "main": [[{ "node": "Normalize Lead Data", "type": "main", "index": 0 }]] },
+    "Normalize Lead Data": { "main": [[{ "node": "Upsert HubSpot Contact", "type": "main", "index": 0 }]] },
+    "Upsert HubSpot Contact": { "main": [[{ "node": "Log to Google Sheet", "type": "main", "index": 0 }]] },
+    "Log to Google Sheet": { "main": [[{ "node": "Notify Sales Team", "type": "main", "index": 0 }]] },
+    "Notify Sales Team": { "main": [[{ "node": "Return 200 OK", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "new-lead-crm-v1",
+  "meta": { "instanceId": "growth-marketing-examples" },
+  "id": "GrowthWF002",
+  "tags": []
+}
