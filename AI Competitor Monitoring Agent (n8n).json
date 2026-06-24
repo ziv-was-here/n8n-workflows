@@ -1,0 +1,377 @@
+{
+  "name": "AI Competitor Monitoring Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🕵️ AI Competitor Monitoring Agent\n\n**What this does:**\nRuns daily, reads your competitor list from Google Sheets, scrapes each website, compares content to the last snapshot, uses Gemini AI to summarize what changed, sends per-change Slack alerts, and posts a daily digest.\n\n---\n\n### 📋 Google Sheets setup (required before running)\nCreate a spreadsheet with two tabs:\n\n**Tab 1 — \"Competitors\"** (columns):\n`Competitor Name` | `URL` | `Active` | `Last Content` | `Content Hash` | `Last Checked` | `Last Changed`\n\nAdd one row per competitor. Set `Active` = `Yes` to enable monitoring. Leave D–G blank on first run.\n\n**Tab 2 — \"Change Log\"** (columns):\n`Date` | `Competitor` | `URL` | `AI Summary` | `Type`\n\n---\n\n### ✅ Credentials to configure\n1. **Google Sheets OAuth2** (`googleSheetsOAuth2Api`) — *Read Competitors*, *Update Snapshot*, *Append Change Log*, *Update Last Checked*\n2. **Google Gemini API** (`googlePalmApi`) — *AI Change Analyst*\n3. **Slack OAuth2** (`slackOAuth2Api`) — *Slack Alert*, *Daily Digest*\n\n### ⚙️ Customize\n- Google Sheet ID in all Sheets nodes\n- Slack channel IDs in both Slack nodes\n- Schedule: change the trigger to run at your preferred time\n- Scrape depth: add more URLs per competitor by duplicating the flow",
+        "height": 620,
+        "width": 620,
+        "color": 5
+      },
+      "id": "cm-note-001",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-1020, -380]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            { "field": "hours", "hoursInterval": 24, "triggerAtHour": 8 }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [-800, 0],
+      "id": "cm-sched-001",
+      "name": "Daily 8am"
+    },
+    {
+      "parameters": {
+        "operation": "readAllRows",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Competitors",
+          "mode": "name"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [-580, 0],
+      "id": "cm-sheets-read-001",
+      "name": "Read Competitors",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Filter to active competitors only and normalize field names\nconst active = items.filter(i => {\n  const v = (i.json['Active'] || i.json['active'] || '').toString().toLowerCase();\n  return v === 'yes' || v === 'true' || v === '1';\n});\n\nif (active.length === 0) {\n  throw new NodeOperationError(this.getNode(), 'No active competitors found in the sheet. Set Active=Yes for at least one row.');\n}\n\nreturn active.map(i => ({\n  json: {\n    name: i.json['Competitor Name'] || i.json['name'] || 'Unknown',\n    url: (i.json['URL'] || i.json['url'] || '').trim(),\n    lastContent: i.json['Last Content'] || '',\n    lastHash: i.json['Content Hash'] || '',\n    lastChecked: i.json['Last Checked'] || '',\n    lastChanged: i.json['Last Changed'] || ''\n  }\n})).filter(i => i.json.url);"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [-360, 0],
+      "id": "cm-code-filter-001",
+      "name": "Filter Active Competitors"
+    },
+    {
+      "parameters": {
+        "method": "GET",
+        "url": "={{ $json.url }}",
+        "options": {
+          "timeout": 15000,
+          "response": {
+            "response": {
+              "neverError": true,
+              "responseFormat": "text"
+            }
+          },
+          "redirect": {
+            "redirect": {
+              "followRedirects": true,
+              "maxRedirects": 3
+            }
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [-140, 0],
+      "id": "cm-http-scrape-001",
+      "name": "Scrape Website"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract visible text from HTML and detect content changes\nfunction extractText(html) {\n  if (!html || typeof html !== 'string') return '';\n  return html\n    .replace(/<script[\\s\\S]*?<\\/script>/gi, ' ')\n    .replace(/<style[\\s\\S]*?<\\/style>/gi, ' ')\n    .replace(/<nav[\\s\\S]*?<\\/nav>/gi, ' ')\n    .replace(/<footer[\\s\\S]*?<\\/footer>/gi, ' ')\n    .replace(/<header[\\s\\S]*?<\\/header>/gi, ' ')\n    .replace(/<[^>]+>/g, ' ')\n    .replace(/&nbsp;/g, ' ').replace(/&amp;/g, '&')\n    .replace(/&lt;/g, '<').replace(/&gt;/g, '>')\n    .replace(/\\s+/g, ' ')\n    .trim()\n    .slice(0, 3000);\n}\n\nfunction simpleHash(str) {\n  let h = 5381;\n  for (let i = 0; i < str.length; i++) {\n    h = Math.imul(31, h) + str.charCodeAt(i) | 0;\n  }\n  return Math.abs(h).toString(16);\n}\n\nconst competitor = $('Filter Active Competitors').item.json;\nconst rawHtml = $input.item.json.data || $input.item.json.body || '';\n\nconst newText = extractText(rawHtml);\nconst newHash = simpleHash(newText);\nconst oldHash = competitor.lastHash || '';\nconst isFirstRun = !oldHash;\nconst changed = !isFirstRun && newHash !== oldHash;\n\nreturn [{\n  json: {\n    name: competitor.name,\n    url: competitor.url,\n    newText,\n    newHash,\n    oldContent: competitor.lastContent || '',\n    changed,\n    isFirstRun,\n    lastChanged: competitor.lastChanged || ''\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [80, 0],
+      "id": "cm-code-extract-001",
+      "name": "Extract & Detect Change"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": false, "leftValue": "", "typeValidation": "loose" },
+          "conditions": [
+            {
+              "id": "changed-check",
+              "leftValue": "={{ $json.changed }}",
+              "rightValue": true,
+              "operator": { "type": "boolean", "operation": "equals" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [300, 0],
+      "id": "cm-if-changed-001",
+      "name": "Content Changed?"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a competitive intelligence analyst. A competitor's website content has changed.\n\nCompetitor: {{ $json.name }}\nURL: {{ $json.url }}\n\nPREVIOUS CONTENT (snapshot):\n{{ $json.oldContent.slice(0, 1200) }}\n\nNEW CONTENT (current):\n{{ $json.newText.slice(0, 1200) }}\n\nAnalyze what changed. Focus on:\n- New or removed product features\n- Pricing changes\n- Messaging or positioning shifts\n- New partnerships or integrations\n- Any strategic signals\n\nRespond in this EXACT format:\nHEADLINE: [one sentence, most important change]\nCHANGES:\n- [bullet 1]\n- [bullet 2]\n- [bullet 3 if applicable]\nIMPACT: [one sentence on what this means for us competitively]",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [520, -100],
+      "id": "cm-ai-001",
+      "name": "AI Change Analyst"
+    },
+    {
+      "parameters": { "options": {} },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [520, 80],
+      "id": "cm-gemini-001",
+      "name": "Google Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse AI output into structured fields\nconst output = $input.item.json.output || '';\nconst headlineMatch = output.match(/HEADLINE:\\s*(.+)/);\nconst changesMatch = output.match(/CHANGES:\\n([\\s\\S]+?)(?=IMPACT:|$)/);\nconst impactMatch = output.match(/IMPACT:\\s*(.+)/);\n\nconst headline = headlineMatch ? headlineMatch[1].trim() : 'Website content changed';\nconst changes = changesMatch ? changesMatch[1].trim() : '';\nconst impact = impactMatch ? impactMatch[1].trim() : '';\n\nreturn [{\n  json: {\n    ...$input.item.json,\n    headline,\n    changes,\n    impact,\n    aiSummary: `${headline}\\n\\n${changes}\\n\\nImpact: ${impact}`.trim()\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [740, -100],
+      "id": "cm-code-parse-ai-001",
+      "name": "Parse AI Output"
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Competitors",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "URL": "={{ $json.url }}",
+            "Last Content": "={{ $json.newText }}",
+            "Content Hash": "={{ $json.newHash }}",
+            "Last Checked": "={{ $now.toISO() }}",
+            "Last Changed": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["URL"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [960, -100],
+      "id": "cm-sheets-update-snap-001",
+      "name": "Update Snapshot",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Change Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now.toISO() }}",
+            "Competitor": "={{ $('Parse AI Output').item.json.name }}",
+            "URL": "={{ $('Parse AI Output').item.json.url }}",
+            "AI Summary": "={{ $('Parse AI Output').item.json.aiSummary }}",
+            "Type": "=Changed"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1180, -100],
+      "id": "cm-sheets-log-001",
+      "name": "Append Change Log",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=🚨 *Competitor Update: {{ $('Parse AI Output').item.json.name }}*\n\n*{{ $('Parse AI Output').item.json.headline }}*\n\n{{ $('Parse AI Output').item.json.changes }}\n\n💡 *Impact:* {{ $('Parse AI Output').item.json.impact }}\n\n🔗 {{ $('Parse AI Output').item.json.url }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1400, -100],
+      "id": "cm-slack-alert-001",
+      "name": "Slack Alert",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Competitors",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "URL": "={{ $json.url }}",
+            "Last Content": "={{ $json.newText }}",
+            "Content Hash": "={{ $json.newHash }}",
+            "Last Checked": "={{ $now.toISO() }}"
+          },
+          "matchingColumns": ["URL"],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [520, 160],
+      "id": "cm-sheets-no-change-001",
+      "name": "Update Last Checked",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "append",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3,
+      "position": [1620, 0],
+      "id": "cm-merge-001",
+      "name": "Merge All Results"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Build daily digest from all processed competitors\nconst changed = items.filter(i => i.json.changed);\nconst unchanged = items.filter(i => !i.json.changed);\n\nif (changed.length === 0) {\n  return [{\n    json: {\n      hasChanges: false,\n      digestText: `✅ *Daily Competitor Check — ${new Date().toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'})}*\\n\\nNo changes detected across ${items.length} competitor(s) today.`\n    }\n  }];\n}\n\nconst changesSummary = changed.map(i => {\n  const d = i.json;\n  return `*${d.name}* — ${d.headline || 'Content changed'}\\n${d.url}`;\n}).join('\\n\\n');\n\nreturn [{\n  json: {\n    hasChanges: true,\n    changedCount: changed.length,\n    totalCount: items.length,\n    digestText: `📊 *Daily Competitor Digest — ${new Date().toLocaleDateString('en-US', {weekday:'long', month:'short', day:'numeric'})}*\\n\\n*${changed.length} change(s)* detected out of ${items.length} competitors monitored:\\n\\n${changesSummary}\\n\\n_See Slack alerts above for full AI analysis._`\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1840, 0],
+      "id": "cm-code-digest-001",
+      "name": "Build Daily Digest"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "={{ $json.digestText }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [2060, 0],
+      "id": "cm-slack-digest-001",
+      "name": "Daily Digest",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Daily 8am": { "main": [[{ "node": "Read Competitors", "type": "main", "index": 0 }]] },
+    "Read Competitors": { "main": [[{ "node": "Filter Active Competitors", "type": "main", "index": 0 }]] },
+    "Filter Active Competitors": { "main": [[{ "node": "Scrape Website", "type": "main", "index": 0 }]] },
+    "Scrape Website": { "main": [[{ "node": "Extract & Detect Change", "type": "main", "index": 0 }]] },
+    "Extract & Detect Change": { "main": [[{ "node": "Content Changed?", "type": "main", "index": 0 }]] },
+    "Content Changed?": {
+      "main": [
+        [{ "node": "AI Change Analyst", "type": "main", "index": 0 }],
+        [{ "node": "Update Last Checked", "type": "main", "index": 0 }]
+      ]
+    },
+    "Google Gemini": { "ai_languageModel": [[{ "node": "AI Change Analyst", "type": "ai_languageModel", "index": 0 }]] },
+    "AI Change Analyst": { "main": [[{ "node": "Parse AI Output", "type": "main", "index": 0 }]] },
+    "Parse AI Output": { "main": [[{ "node": "Update Snapshot", "type": "main", "index": 0 }]] },
+    "Update Snapshot": { "main": [[{ "node": "Append Change Log", "type": "main", "index": 0 }]] },
+    "Append Change Log": { "main": [[{ "node": "Slack Alert", "type": "main", "index": 0 }]] },
+    "Slack Alert": { "main": [[{ "node": "Merge All Results", "type": "main", "index": 0 }]] },
+    "Update Last Checked": { "main": [[{ "node": "Merge All Results", "type": "main", "index": 1 }]] },
+    "Merge All Results": { "main": [[{ "node": "Build Daily Digest", "type": "main", "index": 0 }]] },
+    "Build Daily Digest": { "main": [[{ "node": "Daily Digest", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "competitor-monitor-n8n-v1",
+  "meta": { "instanceId": "growth-marketing-examples" },
+  "id": "CompetitorMonitor001",
+  "tags": []
+}
