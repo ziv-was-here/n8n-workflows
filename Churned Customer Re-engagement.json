@@ -1,0 +1,216 @@
+{
+  "name": "Churned Customer Re-engagement",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🔄 Churned Customer Re-engagement\n\n**What this does:**\nRuns weekly, finds HubSpot customers with no activity in the last 60 days, uses Gemini AI to draft a personalized re-engagement message for each, creates a HubSpot task for the owner to send it, logs everything to Google Sheets, and sends a weekly summary to Slack.\n\n---\n\n### ✅ Credentials to configure\n1. **HubSpot OAuth2** (`hubspotOAuth2Api`) — nodes: *Find Inactive Customers*, *Create Re-engagement Task*\n2. **Google Gemini API** (`googlePalmApi`) — node: *Google Gemini*\n3. **Google Sheets OAuth2** (`googleSheetsOAuth2Api`) — node: *Log Re-engagement*\n4. **Slack OAuth2** (`slackOAuth2Api`) — node: *Weekly Summary*\n\n### ⚙️ Customize\n- Inactivity threshold: change `60` days in *Find Inactive Customers*\n- Lifecycle stage filter: currently `customer` — update if needed\n- Google Sheet ID and tab name in *Log Re-engagement*\n- Slack channel in *Weekly Summary*\n- Your product name and value prop in the AI prompt inside *Draft Re-engagement Message*",
+        "height": 520,
+        "width": 580,
+        "color": 6
+      },
+      "id": "re-note-001",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-380, -360]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "weeks", "weeksInterval": 1, "triggerAtDay": [1], "triggerAtHour": 9 }]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "re-sched-001",
+      "name": "Weekly Monday 9am"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filterGroups\": [\n    {\n      \"filters\": [\n        {\n          \"propertyName\": \"lifecyclestage\",\n          \"operator\": \"EQ\",\n          \"value\": \"customer\"\n        },\n        {\n          \"propertyName\": \"notes_last_contacted\",\n          \"operator\": \"LT\",\n          \"value\": \"{{ $now.minus(60, 'days').toMillis() }}\"\n        }\n      ]\n    }\n  ],\n  \"properties\": [\"firstname\", \"lastname\", \"email\", \"company\", \"jobtitle\", \"hubspot_owner_id\", \"notes_last_contacted\", \"hs_email_last_open_date\"],\n  \"limit\": 20\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "id": "re-hs-search-001",
+      "name": "Find Inactive Customers",
+      "credentials": {
+        "hubspotOAuth2Api": {
+          "id": "REPLACE_WITH_HUBSPOT_CREDENTIAL_ID",
+          "name": "HubSpot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten and enrich contacts for AI processing\nconst results = $input.first().json.results || [];\nif (results.length === 0) return [];\n\nreturn results.map(c => ({\n  json: {\n    contactId: c.id,\n    firstName: c.properties.firstname || 'there',\n    lastName: c.properties.lastname || '',\n    email: c.properties.email || '',\n    company: c.properties.company || 'your company',\n    jobTitle: c.properties.jobtitle || '',\n    ownerId: c.properties.hubspot_owner_id || '',\n    lastContacted: c.properties.notes_last_contacted || 'unknown',\n    lastEmailOpen: c.properties.hs_email_last_open_date || 'never'\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0],
+      "id": "re-code-flatten-001",
+      "name": "Flatten Contacts"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a growth marketer writing a re-engagement email for a customer who has gone quiet.\n\nCustomer:\n- First name: {{ $json.firstName }}\n- Company: {{ $json.company }}\n- Job title: {{ $json.jobTitle }}\n\nWrite a short, warm, and genuine re-engagement email (3–4 sentences max). Do NOT be pushy or salesy. Reference their company naturally. Offer a specific value (a quick check-in call, a new feature, or a useful resource).\n\nRespond ONLY in this format:\nSUBJECT: [email subject line]\nBODY:\n[email body — plain text, no markdown]",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [720, 0],
+      "id": "re-ai-001",
+      "name": "Draft Re-engagement Message"
+    },
+    {
+      "parameters": { "options": {} },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [720, 180],
+      "id": "re-gemini-001",
+      "name": "Google Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Parse subject and body from AI output\nreturn items.map(item => {\n  const output = item.json.output || '';\n  const subjectMatch = output.match(/SUBJECT:\\s*(.+)/);\n  const bodyMatch = output.match(/BODY:\\n([\\s\\S]+)/);\n  return {\n    json: {\n      ...item.json,\n      emailSubject: subjectMatch ? subjectMatch[1].trim() : 'Checking in',\n      emailBody: bodyMatch ? bodyMatch[1].trim() : output\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 0],
+      "id": "re-code-parse-001",
+      "name": "Parse Email Draft"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/tasks",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"properties\": {\n    \"hs_task_subject\": \"Re-engage: {{ $json.firstName }} {{ $json.lastName }} @ {{ $json.company }}\",\n    \"hs_task_body\": \"Suggested subject: {{ $json.emailSubject }}\\n\\n{{ $json.emailBody }}\",\n    \"hs_task_status\": \"NOT_STARTED\",\n    \"hs_task_type\": \"EMAIL\",\n    \"hs_timestamp\": \"{{ $now.plus(1, 'day').toMillis() }}\",\n    \"hubspot_owner_id\": \"{{ $json.ownerId }}\"\n  },\n  \"associations\": [\n    {\n      \"to\": { \"id\": \"{{ $json.contactId }}\" },\n      \"types\": [{ \"associationCategory\": \"HUBSPOT_DEFINED\", \"associationTypeId\": 204 }]\n    }\n  ]\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 0],
+      "id": "re-hs-task-001",
+      "name": "Create Re-engagement Task",
+      "credentials": {
+        "hubspotOAuth2Api": {
+          "id": "REPLACE_WITH_HUBSPOT_CREDENTIAL_ID",
+          "name": "HubSpot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "operation": "append",
+        "documentId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_GOOGLE_SHEET_ID",
+          "mode": "id"
+        },
+        "sheetName": {
+          "__rl": true,
+          "value": "Re-engagement Log",
+          "mode": "name"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "value": {
+            "Date": "={{ $now.toISODate() }}",
+            "Contact ID": "={{ $('Parse Email Draft').item.json.contactId }}",
+            "Name": "={{ $('Parse Email Draft').item.json.firstName + ' ' + $('Parse Email Draft').item.json.lastName }}",
+            "Email": "={{ $('Parse Email Draft').item.json.email }}",
+            "Company": "={{ $('Parse Email Draft').item.json.company }}",
+            "Last Contacted": "={{ $('Parse Email Draft').item.json.lastContacted }}",
+            "Email Subject": "={{ $('Parse Email Draft').item.json.emailSubject }}",
+            "Task Created": "=Yes"
+          },
+          "matchingColumns": [],
+          "schema": []
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.5,
+      "position": [1440, 0],
+      "id": "re-sheets-001",
+      "name": "Log Re-engagement",
+      "credentials": {
+        "googleSheetsOAuth2Api": {
+          "id": "REPLACE_WITH_GOOGLE_SHEETS_CREDENTIAL_ID",
+          "name": "Google Sheets account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Aggregate all processed contacts for summary\nconst allContacts = items.map(i => `• ${i.json.firstName} ${i.json.lastName} (${i.json.company})`);\nreturn [{\n  json: {\n    count: allContacts.length,\n    summary: allContacts.join('\\n')\n  }\n}];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1680, 0],
+      "id": "re-code-agg-001",
+      "name": "Aggregate Summary"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=🔄 *Weekly Re-engagement Run Complete*\n\n{{ $json.count }} inactive customer(s) queued for outreach — HubSpot tasks created for owners:\n\n{{ $json.summary }}",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1920, 0],
+      "id": "re-slack-001",
+      "name": "Weekly Summary",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Weekly Monday 9am": { "main": [[{ "node": "Find Inactive Customers", "type": "main", "index": 0 }]] },
+    "Find Inactive Customers": { "main": [[{ "node": "Flatten Contacts", "type": "main", "index": 0 }]] },
+    "Flatten Contacts": { "main": [[{ "node": "Draft Re-engagement Message", "type": "main", "index": 0 }]] },
+    "Google Gemini": { "ai_languageModel": [[{ "node": "Draft Re-engagement Message", "type": "ai_languageModel", "index": 0 }]] },
+    "Draft Re-engagement Message": { "main": [[{ "node": "Parse Email Draft", "type": "main", "index": 0 }]] },
+    "Parse Email Draft": { "main": [[{ "node": "Create Re-engagement Task", "type": "main", "index": 0 }]] },
+    "Create Re-engagement Task": { "main": [[{ "node": "Log Re-engagement", "type": "main", "index": 0 }]] },
+    "Log Re-engagement": { "main": [[{ "node": "Aggregate Summary", "type": "main", "index": 0 }]] },
+    "Aggregate Summary": { "main": [[{ "node": "Weekly Summary", "type": "main", "index": 0 }]] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "re-engagement-v1",
+  "meta": { "instanceId": "growth-marketing-examples" },
+  "id": "GrowthWF003",
+  "tags": []
+}
