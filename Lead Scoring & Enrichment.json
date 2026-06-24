@@ -1,0 +1,185 @@
+{
+  "name": "Lead Scoring & Enrichment",
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## 🎯 Lead Scoring & Enrichment\n\n**What this does:**\nRuns every hour, fetches recently created HubSpot contacts, uses Gemini AI to score each lead 1–100 based on job title and company, writes the score back to HubSpot, and pings Slack for hot leads (score ≥ 70).\n\n---\n\n### ✅ Credentials to configure\n1. **HubSpot OAuth2** (`hubspotOAuth2Api`) — nodes: *Search New Contacts*, *Update Lead Score*\n2. **Google Gemini API** (`googlePalmApi`) — node: *Google Gemini*\n3. **Slack OAuth2** (`slackOAuth2Api`) — node: *Notify Hot Lead*\n\n### ⚙️ Customize\n- Create two custom HubSpot contact properties before importing:\n  `lead_score` (Number) and `lead_score_reason` (Single-line text)\n- Change the hot-lead threshold in the *Hot Lead?* IF node (default: 70)\n- Set your Slack channel in *Notify Hot Lead*",
+        "height": 480,
+        "width": 560,
+        "color": 4
+      },
+      "id": "ls-note-001",
+      "name": "Setup Instructions",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [-360, -320]
+    },
+    {
+      "parameters": {
+        "rule": {
+          "interval": [{ "field": "hours", "hoursInterval": 1 }]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [0, 0],
+      "id": "ls-sched-001",
+      "name": "Every Hour"
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://api.hubapi.com/crm/v3/objects/contacts/search",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"filterGroups\": [\n    {\n      \"filters\": [\n        {\n          \"propertyName\": \"createdate\",\n          \"operator\": \"GT\",\n          \"value\": \"{{ $now.minus(1, 'hour').toMillis() }}\"\n        },\n        {\n          \"propertyName\": \"lead_score\",\n          \"operator\": \"NOT_HAS_PROPERTY\"\n        }\n      ]\n    }\n  ],\n  \"properties\": [\"firstname\", \"lastname\", \"email\", \"jobtitle\", \"company\", \"hs_lead_status\"],\n  \"limit\": 50\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [240, 0],
+      "id": "ls-hs-search-001",
+      "name": "Search New Contacts",
+      "credentials": {
+        "hubspotOAuth2Api": {
+          "id": "REPLACE_WITH_HUBSPOT_CREDENTIAL_ID",
+          "name": "HubSpot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Flatten HubSpot search results into one item per contact\nconst results = $input.first().json.results || [];\nif (results.length === 0) return [];\n\nreturn results.map(contact => ({\n  json: {\n    contactId: contact.id,\n    firstName: contact.properties.firstname || '',\n    lastName: contact.properties.lastname || '',\n    email: contact.properties.email || '',\n    jobTitle: contact.properties.jobtitle || 'Unknown',\n    company: contact.properties.company || 'Unknown',\n    leadStatus: contact.properties.hs_lead_status || 'NEW'\n  }\n}));"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [480, 0],
+      "id": "ls-code-prep-001",
+      "name": "Flatten Contacts"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "=You are a B2B lead scoring expert. Score this lead from 1 to 100.\n\nLead:\n- Name: {{ $json.firstName }} {{ $json.lastName }}\n- Job Title: {{ $json.jobTitle }}\n- Company: {{ $json.company }}\n- Email: {{ $json.email }}\n\nScoring guide:\n• C-suite / VP / Director / Head of → +30\n• Manager / Lead / Senior → +20\n• Business email (not gmail/yahoo/hotmail) → +15\n• Recognizable company name → +15\n• Missing or vague title → -10\n• Personal email only → -10\n\nRespond ONLY in this exact format:\nSCORE: [number 1-100]\nREASON: [one sentence]",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2,
+      "position": [720, 0],
+      "id": "ls-ai-001",
+      "name": "AI Lead Scorer"
+    },
+    {
+      "parameters": { "options": {} },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [720, 180],
+      "id": "ls-gemini-001",
+      "name": "Google Gemini",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "REPLACE_WITH_GEMINI_CREDENTIAL_ID",
+          "name": "Google Gemini API"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "// Extract score and reason from AI output\nreturn items.map(item => {\n  const output = item.json.output || '';\n  const scoreMatch = output.match(/SCORE:\\s*(\\d+)/);\n  const reasonMatch = output.match(/REASON:\\s*(.+)/);\n  const score = scoreMatch ? parseInt(scoreMatch[1], 10) : 0;\n  const reason = reasonMatch ? reasonMatch[1].trim() : 'Unable to determine';\n  return {\n    json: {\n      ...item.json,\n      leadScore: Math.min(100, Math.max(0, score)),\n      scoreReason: reason\n    }\n  };\n});"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [960, 0],
+      "id": "ls-code-parse-001",
+      "name": "Parse Score"
+    },
+    {
+      "parameters": {
+        "method": "PATCH",
+        "url": "=https://api.hubapi.com/crm/v3/objects/contacts/{{ $json.contactId }}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "hubspotOAuth2Api",
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={\n  \"properties\": {\n    \"lead_score\": \"{{ $json.leadScore }}\",\n    \"lead_score_reason\": \"{{ $json.scoreReason }}\"\n  }\n}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [1200, 0],
+      "id": "ls-hs-update-001",
+      "name": "Update Lead Score",
+      "credentials": {
+        "hubspotOAuth2Api": {
+          "id": "REPLACE_WITH_HUBSPOT_CREDENTIAL_ID",
+          "name": "HubSpot account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": { "caseSensitive": true, "leftValue": "", "typeValidation": "strict" },
+          "conditions": [
+            {
+              "id": "hot-lead-check",
+              "leftValue": "={{ $json.leadScore }}",
+              "rightValue": 70,
+              "operator": { "type": "number", "operation": "gte" }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [1440, 0],
+      "id": "ls-if-hot-001",
+      "name": "Hot Lead? (≥ 70)"
+    },
+    {
+      "parameters": {
+        "authentication": "oAuth2",
+        "select": "channel",
+        "channelId": {
+          "__rl": true,
+          "value": "REPLACE_WITH_SLACK_CHANNEL_ID",
+          "mode": "id"
+        },
+        "text": "=🔥 *Hot Lead Detected* — Score: {{ $json.leadScore }}/100\n\n*{{ $json.firstName }} {{ $json.lastName }}*\n📧 {{ $json.email }}\n💼 {{ $json.jobTitle }} @ {{ $json.company }}\n\n_{{ $json.scoreReason }}_",
+        "otherOptions": {}
+      },
+      "type": "n8n-nodes-base.slack",
+      "typeVersion": 2.3,
+      "position": [1680, -80],
+      "id": "ls-slack-001",
+      "name": "Notify Hot Lead",
+      "credentials": {
+        "slackOAuth2Api": {
+          "id": "REPLACE_WITH_SLACK_CREDENTIAL_ID",
+          "name": "Slack account"
+        }
+      }
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Every Hour": { "main": [[{ "node": "Search New Contacts", "type": "main", "index": 0 }]] },
+    "Search New Contacts": { "main": [[{ "node": "Flatten Contacts", "type": "main", "index": 0 }]] },
+    "Flatten Contacts": { "main": [[{ "node": "AI Lead Scorer", "type": "main", "index": 0 }]] },
+    "Google Gemini": { "ai_languageModel": [[{ "node": "AI Lead Scorer", "type": "ai_languageModel", "index": 0 }]] },
+    "AI Lead Scorer": { "main": [[{ "node": "Parse Score", "type": "main", "index": 0 }]] },
+    "Parse Score": { "main": [[{ "node": "Update Lead Score", "type": "main", "index": 0 }]] },
+    "Update Lead Score": { "main": [[{ "node": "Hot Lead? (≥ 70)", "type": "main", "index": 0 }]] },
+    "Hot Lead? (≥ 70)": { "main": [[{ "node": "Notify Hot Lead", "type": "main", "index": 0 }], []] }
+  },
+  "active": false,
+  "settings": { "executionOrder": "v1" },
+  "versionId": "lead-scoring-v1",
+  "meta": { "instanceId": "growth-marketing-examples" },
+  "id": "GrowthWF001",
+  "tags": []
+}
